@@ -19,7 +19,7 @@
 // Blinking rate in milliseconds
 #define BLINKING_RATE     5s
 
-
+const static char DEVICE_NAME[] = "BATTERY";
 
 
 
@@ -160,6 +160,7 @@ private:
         }
 
         /* all calls are serialised on the user thread through the event queue */
+
         _event_queue.call(this, &GapDemo::advertise);
     }
 
@@ -200,7 +201,7 @@ private:
             advertising_params.getMaxPrimaryInterval().valueInMs()
         );
 
-#if BLE_FEATURE_EXTENDED_ADVERTISING
+#if BLE_FEATURE_EXTENDED_ADVERTISINGz
         /* if we support extended advertising we'll also additionally advertise another set at the same time */
         if (_gap.isFeatureSupported(ble::controller_supported_features_t::LE_EXTENDED_ADVERTISING)) {
             /* With Bluetooth 5; it is possible to advertise concurrently multiple
@@ -242,7 +243,7 @@ private:
                 extended_advertising_params.getMaxPrimaryInterval().valueInMs()
             );
         }
-#endif // BLE_FEATURE_EXTENDED_ADVERTISING
+#endif // BLE_FEATURE_EXTENDED_ADVERTISINGz
 
         _demo_duration.reset();
         _demo_duration.start();
@@ -360,7 +361,7 @@ private:
             }
         }
 
-#if BLE_FEATURE_EXTENDED_ADVERTISING
+#if BLE_FEATURE_EXTENDED_ADVERTISINGz
         if (event.getAdvHandle() == _extended_adv_handle) {
             /* we were waiting for it to stop before destroying it and starting scanning */
             ble_error_t error = _gap.destroyAdvertisingSet(_extended_adv_handle);
@@ -374,7 +375,7 @@ private:
 
             _event_queue.call_in(delay, [this]{ scan(); });
         }
-#endif //BLE_FEATURE_EXTENDED_ADVERTISING
+#endif //BLE_FEATURE_EXTENDED_ADVERTISINGz
     }
 
     void onAdvertisingStart(const ble::AdvertisingStartEvent &event) override
@@ -395,7 +396,7 @@ private:
         _is_connecting = false;
         _demo_duration.stop();
 
-#if BLE_FEATURE_EXTENDED_ADVERTISING
+#if BLE_FEATURE_EXTENDED_ADVERTISINGz
         if (!_is_in_scanning_phase) {
             /* if we have more than one advertising sets one of them might still be active */
             if (_extended_adv_handle != ble::INVALID_ADVERTISING_HANDLE) {
@@ -407,7 +408,7 @@ private:
                 }
             }
         }
-#endif // BLE_FEATURE_EXTENDED_ADVERTISING
+#endif // BLE_FEATURE_EXTENDED_ADVERTISINGz
 
         if (event.getStatus() != BLE_ERROR_NONE) {
             print_error(event.getStatus(), "Connection failed");
@@ -534,7 +535,7 @@ private:
 
         _gap.stopAdvertising(ble::LEGACY_ADVERTISING_HANDLE);
 
-#if BLE_FEATURE_EXTENDED_ADVERTISING
+#if BLE_FEATURE_EXTENDED_ADVERTISINGz
         if (_extended_adv_handle != ble::INVALID_ADVERTISING_HANDLE) {
             /* if it's still active, stop it */
             if (_gap.isAdvertisingActive(_extended_adv_handle)) {
@@ -549,7 +550,7 @@ private:
         _is_in_scanning_phase = true;
 
         _event_queue.call_in(delay, [this]{ scan(); });
-#endif // BLE_FEATURE_EXTENDED_ADVERTISING
+#endif // BLE_FEATURE_EXTENDED_ADVERTISINGz
     }
 
     /** print some information about our radio activity */
@@ -591,14 +592,14 @@ private:
         uint16_t events = (duration_ts / interval_ts);
         uint16_t extended_events = 0;
 
-#if BLE_FEATURE_EXTENDED_ADVERTISING
+#if BLE_FEATURE_EXTENDED_ADVERTISINGz
         if (_extended_adv_handle != ble::INVALID_ADVERTISING_HANDLE) {
             duration_ts = ble::adv_interval_t(ble::millisecond_t(duration_ms)).value();
             interval_ts = extended_advertising_params.getMaxPrimaryInterval().value();
             /* this is how many times we advertised */
             extended_events = (duration_ts / interval_ts);
         }
-#endif // BLE_FEATURE_EXTENDED_ADVERTISING
+#endif // BLE_FEATURE_EXTENDED_ADVERTISINGz
 
         printf("We have advertised for %dms\r\n", duration_ms);
 
@@ -610,7 +611,7 @@ private:
             printf("We created at least %d tx and rx events\r\n", events);
         }
 
-#if BLE_FEATURE_EXTENDED_ADVERTISING
+#if BLE_FEATURE_EXTENDED_ADVERTISINGz
         if (extended_events) {
             if (extended_advertising_params.getType() == ble::advertising_type_t::NON_CONNECTABLE_UNDIRECTED) {
                 printf("We created at least %d tx events with extended advertising\r\n", extended_events);
@@ -619,7 +620,7 @@ private:
             }
         }
 
-#endif // BLE_FEATURE_EXTENDED_ADVERTISING
+#endif // BLE_FEATURE_EXTENDED_ADVERTISINGz
     }
 
 private:
@@ -636,12 +637,12 @@ private:
     int _cancel_handle = 0;
 
     /* Measure performance of our advertising/scanning */
-    Timer _demo_duration;
+    LowPowerTimer _demo_duration;
     size_t _scan_count = 0;
 
-#if BLE_FEATURE_EXTENDED_ADVERTISING
+#if BLE_FEATURE_EXTENDED_ADVERTISINGz
     ble::advertising_handle_t _extended_adv_handle = ble::INVALID_ADVERTISING_HANDLE;
-#endif // BLE_FEATURE_EXTENDED_ADVERTISING
+#endif // BLE_FEATURE_EXTENDED_ADVERTISINGz
 };
 
 /** Schedule processing of events from the BLE middleware in the event queue. */
@@ -649,6 +650,156 @@ void schedule_ble_events(BLE::OnEventsToProcessCallbackContext *context)
 {
     event_queue.call(Callback<void()>(&context->ble, &BLE::processEvents));
 }
+
+
+
+
+class BatteryDemo : ble::Gap::EventHandler {
+public:
+    BatteryDemo(BLE &ble, events::EventQueue &event_queue) :
+        _ble(ble),
+        _event_queue(event_queue),
+        _battery_level(50),
+        _adv_data_builder(_adv_buffer)
+    {
+    }
+
+    void start()
+    {
+        /* mbed will call on_init_complete when when ble is ready */
+        _ble.init(this, &BatteryDemo::on_init_complete);
+
+        /* this will never return */
+        _event_queue.dispatch_forever();
+    }
+
+private:
+    /** Callback triggered when the ble initialization process has finished */
+    void on_init_complete(BLE::InitializationCompleteCallbackContext *params)
+    {
+        if (params->error != BLE_ERROR_NONE) {
+            print_error(params->error, "Ble initialization failed.");
+            return;
+        }
+
+        print_mac_address();
+
+        start_advertising();
+    }
+
+    void start_advertising()
+    {
+        /* create advertising parameters and payload */
+
+        ble::AdvertisingParameters adv_parameters(
+            /* you cannot connect to this device, you can only read its advertising data,
+             * scannable means that the device has extra advertising data that the peer can receive if it
+             * "scans" it which means it is using active scanning (it sends a scan request) */
+            ble::advertising_type_t::SCANNABLE_UNDIRECTED,
+            ble::adv_interval_t(ble::millisecond_t(1000))
+        );
+
+        /* when advertising you can optionally add extra data that is only sent
+         * if the central requests it by doing active scanning (sending scan requests),
+         * in this example we set this payload first because we want to later reuse
+         * the same _adv_data_builder builder for payload updates */
+
+        const uint8_t _vendor_specific_data[4] = { 0xAD, 0xDE, 0xBE, 0xEF };
+        _adv_data_builder.setManufacturerSpecificData(_vendor_specific_data);
+
+        _ble.gap().setAdvertisingScanResponse(
+            ble::LEGACY_ADVERTISING_HANDLE,
+            _adv_data_builder.getAdvertisingData()
+        );
+
+        /* now we set the advertising payload that gets sent during advertising without any scan requests */
+
+        _adv_data_builder.clear();
+        _adv_data_builder.setFlags();
+        _adv_data_builder.setName(DEVICE_NAME);
+
+        /* we add the battery level as part of the payload so it's visible to any device that scans,
+         * this part of the payload will be updated periodically without affecting the rest of the payload */
+        _adv_data_builder.setServiceData(GattService::UUID_BATTERY_SERVICE, {&_battery_level, 1});
+
+        /* setup advertising */
+
+        ble_error_t error = _ble.gap().setAdvertisingParameters(
+            ble::LEGACY_ADVERTISING_HANDLE,
+            adv_parameters
+        );
+
+        if (error) {
+            print_error(error, "_ble.gap().setAdvertisingParameters() failed");
+            return;
+        }
+
+        error = _ble.gap().setAdvertisingPayload(
+            ble::LEGACY_ADVERTISING_HANDLE,
+            _adv_data_builder.getAdvertisingData()
+        );
+
+        if (error) {
+            print_error(error, "_ble.gap().setAdvertisingPayload() failed");
+            return;
+        }
+
+        /* start advertising */
+
+        error = _ble.gap().startAdvertising(ble::LEGACY_ADVERTISING_HANDLE);
+
+        if (error) {
+            print_error(error, "_ble.gap().startAdvertising() failed");
+            return;
+        }
+
+        /* we simulate battery discharging by updating it every second */
+        _event_queue.call_every(
+            1000ms,
+            [this]() {
+                update_battery_level();
+            }
+        );
+    }
+
+    void update_battery_level()
+    {
+        if (_battery_level-- == 10) {
+            _battery_level = 100;
+        }
+
+        /* update the payload with the new value of the bettery level, the rest of the payload remains the same */
+        ble_error_t error = _adv_data_builder.setServiceData(GattService::UUID_BATTERY_SERVICE, make_Span(&_battery_level, 1));
+
+        if (error) {
+            print_error(error, "_adv_data_builder.setServiceData() failed");
+            return;
+        }
+
+        /* set the new payload, we don't need to stop advertising */
+        error = _ble.gap().setAdvertisingPayload(
+            ble::LEGACY_ADVERTISING_HANDLE,
+            _adv_data_builder.getAdvertisingData()
+        );
+
+        if (error) {
+            print_error(error, "_ble.gap().setAdvertisingPayload() failed");
+            return;
+        }
+    }
+
+private:
+    BLE &_ble;
+    events::EventQueue &_event_queue;
+
+    uint8_t _battery_level;
+
+    uint8_t _adv_buffer[ble::LEGACY_ADVERTISING_MAX_SIZE];
+    ble::AdvertisingDataBuilder _adv_data_builder;
+};
+
+
+
 
 
 int main()
@@ -666,6 +817,8 @@ LL_C2_PWR_SetPowerMode(LL_PWR_MODE_SHUTDOWN);
 		printf("10s low power\r\n");
 
         ThisThread::sleep_for(10s);
+
+        ThisThread::sleep_for(10s);
 		printf("Boot Demo\r\n");
 
 	    BLE &ble = BLE::Instance();
@@ -674,8 +827,10 @@ LL_C2_PWR_SetPowerMode(LL_PWR_MODE_SHUTDOWN);
      * using our event queue */
     ble.onEventsToProcess(schedule_ble_events);
 
-    GapDemo demo(ble, event_queue);
-
-    demo.run();
+    //GapDemo demo(ble, event_queue);
+    //demo.run();
+    
+	BatteryDemo demo(ble, event_queue);
+    demo.start();
 
 }
